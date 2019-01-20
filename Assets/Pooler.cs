@@ -1,17 +1,20 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.Serialization.Formatters.Binary;
 using UnityEngine;
 
 public class Pooler: MonoBehaviour
 {
+	private const float maxExpectedDeltatime = .2f;
+	private const float maxExpectedTotalHeavyness = 5f; // in milliseconds
 
-	public int score;
 
-	private Queue<PoolRequest> toDo;
-	private Queue<PoolRequest> requests;
-	private PoolRequest request;
-	public Dictionary<string, GameObject> PoolingReferences;
-	public Dictionary<string, List<GameObject>> pool;
+	private Queue<PoolRequest> requests; // stores all spawning requests
+	private PoolRequest request; // the current request
+	[SerializeField] public Dictionary<string, GameObject> PoolingReferences;
+	[SerializeField] public Dictionary<string, List<GameObject>> pool;
 
 	public static Pooler curr;
 
@@ -20,47 +23,50 @@ public class Pooler: MonoBehaviour
 		if ( curr != null )
 			throw new System.Exception( "Cannot have multiple instances of Pooler" );
 		curr = this;
-		toDo = new Queue<PoolRequest>();
 		requests = new Queue<PoolRequest>();
 	}
 
+	public GameObject GetFromPool(string identifier)
+	{
+		GameObject go = pool[identifier][0];
+		pool[identifier].RemoveAt(0);
+		go.SetActive( true );
+		return go;
+	}
+
+	public void Request( PoolRequest pr )
+	{
+		requests.Enqueue( pr );
+	}
+
+	public void TryAddReference( GameObject go, string identifier )
+	{
+		if ( PoolingReferences[identifier] == null || go == null )
+		{
+			return;
+		}
+		PoolingReferences.Add( identifier, go );
+	}
 
 	private void ProcessPool()
 	{
 		if ( request == null )
 		{
-			int more = toDo.Count;
-			if ( more == 0 )
+			// we don't have a request
+			if ( requests.Count == 0 )
 			{
-				if ( requests.Count == 0 )
-				{
-					return;
-				}
-				else
-				{
-					toDo.Enqueue( requests.Dequeue() );
-				}
-			}
-
-			// there are requests
-			request = toDo.Dequeue();
-		}
-
-		if ( request.Prioretize )
-		{
-			SpawnObjects( request.identifier, request.numToPool );
-		}
-		else
-		{
-			float timeLeft = request.maxPoolingTime - Time.time;
-			if ( timeLeft < .2f )
-			{
-				SpawnObjects( request.identifier, request.numToPool );
+				// there aren't any at all
 				return;
 			}
-			int poolNow = request.numToPool;
-			SpawnObjects( request.identifier, poolNow );
+			else
+			{
+				request = requests.Dequeue(); // get new request
+			}
 		}
+
+		// we do have a request
+		int numToSpawn = (int) ( maxExpectedDeltatime / request.heavyness ) + 1;
+		SpawnObjects( request.identifier, numToSpawn );
 
 	}
 
@@ -83,5 +89,39 @@ public class Pooler: MonoBehaviour
 	private void Update()
 	{
 		ProcessPool();
+	}
+
+	public static AdvancedHeavyness CalculateHeavyness( GameObject go, int referenceSpawning )
+	{
+		Stopwatch watch = new Stopwatch();
+		GameObject[] objects = new GameObject[referenceSpawning];
+
+		watch.Start();
+
+		for ( int i = 0; i < referenceSpawning; i++ )
+		{
+			objects[i] = Instantiate( go );
+		}
+
+		watch.Stop();
+
+		long size = 0;
+		using ( Stream s = new MemoryStream() )
+		{
+			BinaryFormatter formatter = new BinaryFormatter();
+			formatter.Serialize( s, objects );
+			size = s.Length;
+		}
+
+		foreach ( GameObject g in objects )
+		{
+			Destroy( g );
+		}
+
+		return new AdvancedHeavyness( watch.ElapsedMilliseconds / referenceSpawning, size / referenceSpawning );
+	}
+	public static AdvancedHeavyness CalculateHeavyness( GameObject go )
+	{
+		return CalculateHeavyness( go, 100 );
 	}
 }
